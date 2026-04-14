@@ -44,6 +44,191 @@
 2. 点击 **New query**
 3. 给查询起个名字，如 `create-dimension-votes-table`
 
+### 2. 执行 SQL（创建投票表和管理员表）
+
+复制以下 SQL 代码，粘贴到编辑器中，然后点击 **Run**：
+
+```sql
+-- ============================================
+-- 第一部分：创建维度投票记录表
+-- ============================================
+
+-- 删除旧表（如果存在）
+DROP TABLE IF EXISTS votes CASCADE;
+
+-- 创建维度投票记录表
+CREATE TABLE IF NOT EXISTS dimension_votes (
+  id BIGSERIAL PRIMARY KEY,
+  dimension_id TEXT NOT NULL,
+  vote_count INTEGER NOT NULL DEFAULT 1,
+  voter_id TEXT NOT NULL,
+  voter_name TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 创建索引
+CREATE INDEX idx_dimension_votes_dimension_id ON dimension_votes(dimension_id);
+CREATE INDEX idx_dimension_votes_voter_id ON dimension_votes(voter_id);
+CREATE INDEX idx_dimension_votes_created_at ON dimension_votes(created_at);
+
+-- 创建维度投票统计视图
+CREATE OR REPLACE VIEW dimension_vote_stats AS
+SELECT 
+  dimension_id,
+  SUM(vote_count) as total_votes
+FROM dimension_votes
+GROUP BY dimension_id;
+
+-- 创建总体统计视图
+CREATE OR REPLACE VIEW total_dimension_stats AS
+SELECT 
+  SUM(vote_count) as total_votes,
+  COUNT(DISTINCT voter_id) as total_voters
+FROM dimension_votes;
+
+-- 启用行级安全 (RLS)
+ALTER TABLE dimension_votes ENABLE ROW LEVEL SECURITY;
+
+-- 允许匿名插入投票
+CREATE POLICY "Allow anonymous insert" ON dimension_votes
+  FOR INSERT TO anon
+  WITH CHECK (true);
+
+-- 允许匿名查询投票
+CREATE POLICY "Allow anonymous select" ON dimension_votes
+  FOR SELECT TO anon
+  USING (true);
+
+-- 禁止更新和删除（投票不可修改）
+CREATE POLICY "Disallow update" ON dimension_votes
+  FOR UPDATE TO anon
+  USING (false);
+
+CREATE POLICY "Disallow delete" ON dimension_votes
+  FOR DELETE TO anon
+  USING (false);
+
+-- ============================================
+-- 第二部分：创建管理员账号表
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS admins (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 启用 RLS
+ALTER TABLE admins ENABLE ROW LEVEL SECURITY;
+
+-- 允许匿名查询（用于登录验证）
+CREATE POLICY "Allow anonymous select" ON admins
+  FOR SELECT TO anon
+  USING (true);
+
+-- 禁止插入、更新、删除（仅通过 SQL 手动管理）
+CREATE POLICY "Disallow insert" ON admins
+  FOR INSERT TO anon
+  USING (false);
+
+CREATE POLICY "Disallow update" ON admins
+  FOR UPDATE TO anon
+  USING (false);
+
+CREATE POLICY "Disallow delete" ON admins
+  FOR DELETE TO anon
+  USING (false);
+
+-- ============================================
+-- 第三部分：插入默认管理员账号
+-- ============================================
+
+-- 默认管理员账号：admin / admin123
+INSERT INTO admins (username, password_hash, name) VALUES
+  ('admin', 'admin123', '超级管理员')
+ON CONFLICT (username) DO NOTHING;
+
+-- ============================================
+-- 第四部分：创建管理员统计视图
+-- ============================================
+
+-- 按维度统计（包含投票人列表）
+CREATE OR REPLACE VIEW admin_dimension_stats AS
+SELECT 
+  dimension_id,
+  SUM(vote_count) as total_votes,
+  COUNT(DISTINCT voter_id) as voter_count,
+  ARRAY_AGG(DISTINCT voter_name ORDER BY voter_name) as voter_names
+FROM dimension_votes
+GROUP BY dimension_id;
+
+-- 详细投票记录
+CREATE OR REPLACE VIEW admin_vote_details AS
+SELECT 
+  dv.id,
+  dv.dimension_id,
+  d.title as dimension_title,
+  dv.vote_count,
+  dv.voter_id,
+  dv.voter_name,
+  dv.created_at
+FROM dimension_votes dv
+JOIN (
+  SELECT id, title FROM (
+    VALUES 
+      ('funding', '可持续资金平衡'),
+      ('implementer', '实施主体'),
+      ('unit', '城市更新实施单元生成'),
+      ('coordination', '跨部门协同机制'),
+      ('property', '土地、房屋和空间权属结构'),
+      ('interest', '多元利益平衡'),
+      ('public', '公众参与度'),
+      ('market', '市场活力'),
+      ('stock', '存量转型'),
+      ('capital', '首都功能'),
+      ('industry', '产业转型与新功能导入'),
+      ('quality', '以人为本的空间品质'),
+      ('green', '绿色转型'),
+      ('resource', '资源基础'),
+      ('policy', '政策环境')
+  ) AS t(id, title)
+) d ON dv.dimension_id = d.id
+ORDER BY dv.created_at DESC;
+
+-- 总体统计
+CREATE OR REPLACE VIEW admin_overall_stats AS
+SELECT 
+  SUM(vote_count) as total_votes,
+  COUNT(DISTINCT voter_id) as total_voters,
+  COUNT(DISTINCT dimension_id) as voted_dimensions
+FROM dimension_votes;
+```
+
+### 3. 添加更多管理员账号（可选）
+
+如果需要添加更多管理员，执行：
+
+```sql
+INSERT INTO admins (username, password_hash, name) VALUES
+  ('zhangsan', 'password123', '张三'),
+  ('lisi', 'password456', '李四')
+ON CONFLICT (username) DO NOTHING;
+```
+
+### 4. 验证表创建
+
+1. 点击左侧菜单 **Table Editor**
+2. 确认能看到以下表：
+   - `dimension_votes` - 投票记录表
+   - `admins` - 管理员账号表
+3. 确认 `admins` 表中有默认管理员账号
+
+1. 在项目 Dashboard 中，点击左侧菜单 **SQL Editor**
+2. 点击 **New query**
+3. 给查询起个名字，如 `create-dimension-votes-table`
+
 ### 2. 执行 SQL
 
 复制以下 SQL 代码，粘贴到编辑器中，然后点击 **Run**：
@@ -205,6 +390,42 @@ npm run build
 - 也可以 **分散投票**给多个维度
 - 投票前需要 **输入姓名**
 - 每人只能投票 **一次**
+
+---
+
+## 管理员界面
+
+### 访问方式
+
+在投票页面右上角点击 **"管理"** 按钮，或在浏览器地址栏输入：
+
+```
+https://your-domain.com/admin
+```
+
+### 默认管理员账号
+
+| 用户名 | 密码 | 角色 |
+|--------|------|------|
+| admin | admin123 | 超级管理员 |
+
+### 管理员功能
+
+- ✅ 查看实时投票统计（参与人数、累计票数、已投票维度）
+- ✅ 查看各维度投票排行
+- ✅ 展开查看每个维度的投票人列表
+- ✅ 查看最近投票记录
+- ✅ 数据每 10 秒自动刷新
+
+### 添加更多管理员
+
+在 Supabase SQL Editor 中执行：
+
+```sql
+INSERT INTO admins (username, password_hash, name) VALUES
+  ('username', 'password', '姓名')
+ON CONFLICT (username) DO NOTHING;
+```
 
 ---
 
