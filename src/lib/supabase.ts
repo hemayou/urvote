@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import type { VoteState } from '@/types'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || ''
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
@@ -15,27 +16,37 @@ export function generateVoterId(): string {
   return newId
 }
 
+// 保存/获取投票人姓名
+export function saveVoterName(name: string): void {
+  localStorage.setItem('bupd-voter-name', name)
+}
+
+export function getVoterName(): string | null {
+  return localStorage.getItem('bupd-voter-name')
+}
+
 // 获取投票统计数据
 export async function getVoteStats() {
   try {
     const { data, error } = await supabase
-      .from('vote_stats')
+      .from('dimension_votes')
       .select('*')
     
     if (error) throw error
     
+    // 转换为对象格式
+    const votes: Record<string, number> = {}
+    data?.forEach((stat: { dimension_id: string; total_votes: number }) => {
+      votes[stat.dimension_id] = stat.total_votes
+    })
+    
+    // 获取总体统计
     const { data: totalData, error: totalError } = await supabase
-      .from('total_stats')
+      .from('dimension_vote_stats')
       .select('*')
       .single()
     
-    if (totalError) throw totalError
-    
-    // 转换为对象格式
-    const votes: Record<string, number> = {}
-    data?.forEach((stat: { issue_id: string; total_votes: number }) => {
-      votes[stat.issue_id] = stat.total_votes
-    })
+    if (totalError && totalError.code !== 'PGRST116') throw totalError
     
     return {
       votes,
@@ -52,7 +63,7 @@ export async function getVoteStats() {
 export async function checkHasVoted(voterId: string): Promise<boolean> {
   try {
     const { data, error } = await supabase
-      .from('votes')
+      .from('dimension_votes')
       .select('id')
       .eq('voter_id', voterId)
       .limit(1)
@@ -65,23 +76,25 @@ export async function checkHasVoted(voterId: string): Promise<boolean> {
   }
 }
 
-// 提交投票
+// 提交投票（维度投票）
 export async function submitVotes(
-  votes: Record<string, number>,
-  voterId: string
+  votes: VoteState,
+  voterId: string,
+  voterName: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
     // 准备投票记录
     const voteRecords = Object.entries(votes)
       .filter(([, count]) => count > 0)
-      .map(([issue_id, vote_count]) => ({
-        issue_id,
+      .map(([dimension_id, vote_count]) => ({
+        dimension_id,
         vote_count,
         voter_id: voterId,
+        voter_name: voterName,
       }))
 
     const { error } = await supabase
-      .from('votes')
+      .from('dimension_votes')
       .insert(voteRecords)
 
     if (error) {
@@ -101,10 +114,10 @@ export async function submitVotes(
 // 订阅实时投票更新
 export function subscribeToVotes(callback: (payload: unknown) => void) {
   return supabase
-    .channel('votes-channel')
+    .channel('dimension-votes-channel')
     .on(
       'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'votes' },
+      { event: 'INSERT', schema: 'public', table: 'dimension_votes' },
       callback
     )
     .subscribe()
