@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { NameEntry } from '@/components/NameEntry';
 import { DimensionVoteCard } from '@/components/DimensionVoteCard';
 import { ResultsView } from '@/components/ResultsView';
 import { SwotLegend } from '@/components/SwotLegend';
+import { AdminLogin } from '@/components/AdminLogin';
+import { AdminDashboard } from '@/components/AdminDashboard';
 import { useVoting } from '@/hooks/useVoting';
 import { dimensions, MAX_VOTES } from '@/data/issues';
 import { Button } from '@/components/ui/button';
@@ -19,10 +21,21 @@ import {
   AlertDescription,
   AlertTitle 
 } from '@/components/ui/alert';
-import { CheckCircle, AlertCircle, Landmark, ArrowRight, Loader2, User } from 'lucide-react';
+import { CheckCircle, AlertCircle, Landmark, ArrowRight, Loader2, User, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { checkAdminLogin } from '@/lib/adminAuth';
+
+// 路由类型
+type Route = 'vote' | 'admin-login' | 'admin-dashboard';
 
 function App() {
+  // 当前路由
+  const [currentRoute, setCurrentRoute] = useState<Route>('vote');
+  
+  // 管理员登录状态
+  const [admin, setAdmin] = useState<{ username: string; name: string } | null>(null);
+
+  // 投票相关
   const {
     voterName,
     isNameSet,
@@ -43,6 +56,35 @@ function App() {
   } = useVoting();
 
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+
+  // 检查 URL 路由
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path === '/admin') {
+      // 检查是否已登录
+      const { isLoggedIn, admin: loggedInAdmin } = checkAdminLogin();
+      if (isLoggedIn && loggedInAdmin) {
+        setAdmin(loggedInAdmin);
+        setCurrentRoute('admin-dashboard');
+      } else {
+        setCurrentRoute('admin-login');
+      }
+    }
+  }, []);
+
+  // 管理员登录成功
+  const handleAdminLogin = (loggedInAdmin: { username: string; name: string }) => {
+    setAdmin(loggedInAdmin);
+    setCurrentRoute('admin-dashboard');
+    window.history.pushState({}, '', '/admin');
+  };
+
+  // 管理员登出
+  const handleAdminLogout = () => {
+    setAdmin(null);
+    setCurrentRoute('admin-login');
+    window.history.pushState({}, '', '/admin');
+  };
 
   // 处理姓名提交
   const handleNameSubmit = (name: string) => {
@@ -75,6 +117,16 @@ function App() {
   const handleReset = () => {
     resetVotes();
   };
+
+  // 渲染管理员登录页面
+  if (currentRoute === 'admin-login') {
+    return <AdminLogin onLogin={handleAdminLogin} />;
+  }
+
+  // 渲染管理员仪表盘
+  if (currentRoute === 'admin-dashboard') {
+    return <AdminDashboard admin={admin!} onLogout={handleAdminLogout} />;
+  }
 
   // 加载状态
   if (isLoading) {
@@ -111,24 +163,43 @@ function App() {
               </div>
             </div>
             
-            {!hasVoted && (
-              <div className="flex items-center gap-4">
-                {/* 投票人姓名 */}
-                <div className="flex items-center gap-2 text-sm text-slate-600">
-                  <User className="w-4 h-4" />
-                  <span>{voterName}</span>
+            <div className="flex items-center gap-3">
+              {!hasVoted && (
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2 text-sm text-slate-600">
+                    <User className="w-4 h-4" />
+                    <span>{voterName}</span>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-slate-600">
+                      已投 <span className="text-indigo-600 font-bold">{userTotalVotes}</span> 票
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      剩余 {remainingVotes} 票
+                    </p>
+                  </div>
                 </div>
-                {/* 投票进度 */}
-                <div className="text-right">
-                  <p className="text-sm font-medium text-slate-600">
-                    已投 <span className="text-indigo-600 font-bold">{userTotalVotes}</span> 票
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    剩余 {remainingVotes} 票
-                  </p>
-                </div>
-              </div>
-            )}
+              )}
+              
+              {/* 管理员入口 */}
+              <a
+                href="/admin"
+                onClick={(e) => {
+                  e.preventDefault();
+                  const { isLoggedIn } = checkAdminLogin();
+                  if (isLoggedIn) {
+                    setCurrentRoute('admin-dashboard');
+                  } else {
+                    setCurrentRoute('admin-login');
+                  }
+                  window.history.pushState({}, '', '/admin');
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+              >
+                <Shield className="w-4 h-4" />
+                <span>管理</span>
+              </a>
+            </div>
           </div>
         </div>
       </header>
