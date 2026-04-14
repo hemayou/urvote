@@ -1,15 +1,33 @@
 import { useMemo } from 'react';
 import { Trophy, Users, BarChart3, RotateCcw } from 'lucide-react';
-import { dimensions } from '@/data/issues';
+import { dimensions, swotConfig } from '@/data/issues';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import type { SwotType } from '@/data/issues';
 
 interface ResultsViewProps {
   totalVotes: Record<string, number>;
   totalVoteCount: number;
   voterCount: number;
   userVotes: Record<string, number>;
+  voterName: string;
   onReset: () => void;
+}
+
+// SWOT 标签组件
+function SwotBadge({ type, count }: { type: SwotType; count: number }) {
+  const config = swotConfig[type];
+  return (
+    <div className={cn(
+      "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium",
+      config.bgColor,
+      config.textColor
+    )}>
+      <span className={cn("w-1.5 h-1.5 rounded-full", config.color)} />
+      <span>{config.labelEn}</span>
+      <span className="font-bold">{count}</span>
+    </div>
+  );
 }
 
 export function ResultsView({ 
@@ -17,35 +35,41 @@ export function ResultsView({
   totalVoteCount, 
   voterCount,
   userVotes,
+  voterName,
   onReset 
 }: ResultsViewProps) {
-  // Get top 10 issues
-  const topIssues = useMemo(() => {
-    return Object.entries(totalVotes)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
-  }, [totalVotes]);
-
-  // Get dimension stats
-  const dimensionStats = useMemo(() => {
+  // 获取维度排行
+  const dimensionRankings = useMemo(() => {
     return dimensions.map(dim => {
-      const issueVotes = dim.issues.map(issue => ({
-        issue,
-        votes: totalVotes[issue.id] || 0,
-      }));
-      const totalDimensionVotes = issueVotes.reduce((sum, { votes }) => sum + votes, 0);
+      const swotCounts = {
+        strength: dim.points.filter(p => p.type === 'strength').length,
+        weakness: dim.points.filter(p => p.type === 'weakness').length,
+        opportunity: dim.points.filter(p => p.type === 'opportunity').length,
+        threat: dim.points.filter(p => p.type === 'threat').length,
+      };
       return {
         dimension: dim,
-        totalVotes: totalDimensionVotes,
-        issueVotes: issueVotes.sort((a, b) => b.votes - a.votes),
+        votes: totalVotes[dim.id] || 0,
+        userVotes: userVotes[dim.id] || 0,
+        swotCounts,
       };
-    }).sort((a, b) => b.totalVotes - a.totalVotes);
-  }, [totalVotes]);
+    }).sort((a, b) => b.votes - a.votes);
+  }, [totalVotes, userVotes]);
 
-  const maxDimensionVotes = Math.max(...dimensionStats.map(d => d.totalVotes), 1);
+  const maxVotes = Math.max(...dimensionRankings.map(d => d.votes), 1);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
+      {/* 欢迎语 */}
+      <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-2xl p-5 text-white">
+        <p className="text-lg">
+          感谢您的参与，<span className="font-bold">{voterName}</span>！
+        </p>
+        <p className="text-indigo-100 text-sm mt-1">
+          以下是实时投票结果
+        </p>
+      </div>
+
       {/* Summary Stats */}
       <div className="grid grid-cols-2 gap-4">
         <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-2xl p-5 text-white">
@@ -66,88 +90,79 @@ export function ResultsView({
         </div>
       </div>
 
-      {/* Top 10 Issues */}
+      {/* Dimension Rankings */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
         <div className="flex items-center gap-3 mb-5">
           <Trophy className="w-6 h-6 text-amber-500" />
-          <h3 className="text-xl font-bold text-slate-800">热门议题 TOP 10</h3>
+          <h3 className="text-xl font-bold text-slate-800">议题投票排行</h3>
         </div>
         
-        <div className="space-y-3">
-          {topIssues.map(([issueId, votes], index) => {
-            const issue = dimensions.flatMap(d => d.issues).find(i => i.id === issueId);
-            if (!issue) return null;
-            
+        <div className="space-y-4">
+          {dimensionRankings.map(({ dimension, votes, userVotes: myVotes, swotCounts }, index) => {
             const isTop3 = index < 3;
-            const isUserVoted = userVotes[issueId] > 0;
+            const hasMyVote = myVotes > 0;
+            const percentage = (votes / maxVotes) * 100;
             
             return (
               <div
-                key={issueId}
+                key={dimension.id}
                 className={cn(
-                  "flex items-center gap-4 p-4 rounded-xl transition-all duration-200",
+                  "p-4 rounded-xl transition-all duration-200",
                   isTop3 
                     ? "bg-amber-50 border-2 border-amber-200" 
                     : "bg-slate-50 border border-slate-100",
-                  isUserVoted && "ring-2 ring-indigo-300"
+                  hasMyVote && "ring-2 ring-indigo-300"
                 )}
               >
-                <div className={cn(
-                  "w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0",
-                  index === 0 && "bg-amber-400 text-amber-900",
-                  index === 1 && "bg-slate-300 text-slate-700",
-                  index === 2 && "bg-amber-600 text-amber-100",
-                  index > 2 && "bg-slate-200 text-slate-600"
-                )}>
-                  {index + 1}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-slate-700 leading-relaxed">{issue.text}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className={cn(
-                      "text-xs px-2 py-0.5 rounded-full",
-                      issue.type === 'positive' 
-                        ? "bg-emerald-100 text-emerald-700" 
-                        : "bg-rose-100 text-rose-700"
-                    )}>
-                      {issue.type === 'positive' ? '优势' : '挑战'}
-                    </span>
-                    {isUserVoted && (
-                      <span className="text-xs text-indigo-600 font-medium">
-                        你投了 {userVotes[issueId]} 票
-                      </span>
-                    )}
+                <div className="flex items-start gap-3">
+                  {/* Rank */}
+                  <div className={cn(
+                    "w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0",
+                    index === 0 && "bg-amber-400 text-amber-900",
+                    index === 1 && "bg-slate-300 text-slate-700",
+                    index === 2 && "bg-amber-600 text-amber-100",
+                    index > 2 && "bg-slate-200 text-slate-600"
+                  )}>
+                    {index + 1}
                   </div>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <span className="text-xl font-bold text-slate-800">{votes}</span>
-                  <span className="text-xs text-slate-500">票</span>
+                  
+                  {/* Content */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-2">
+                      <h4 className="font-bold text-slate-800">{dimension.title}</h4>
+                      {hasMyVote && (
+                        <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">
+                          您投了 {myVotes} 票
+                        </span>
+                      )}
+                    </div>
+                    
+                    {/* SWOT badges */}
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {swotCounts.strength > 0 && <SwotBadge type="strength" count={swotCounts.strength} />}
+                      {swotCounts.weakness > 0 && <SwotBadge type="weakness" count={swotCounts.weakness} />}
+                      {swotCounts.opportunity > 0 && <SwotBadge type="opportunity" count={swotCounts.opportunity} />}
+                      {swotCounts.threat > 0 && <SwotBadge type="threat" count={swotCounts.threat} />}
+                    </div>
+                    
+                    {/* Progress bar */}
+                    <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-indigo-400 to-indigo-500 rounded-full transition-all duration-500"
+                        style={{ width: `${percentage}%` }}
+                      />
+                    </div>
+                  </div>
+                  
+                  {/* Vote count */}
+                  <div className="text-right flex-shrink-0">
+                    <span className="text-2xl font-bold text-slate-800">{votes}</span>
+                    <span className="text-xs text-slate-500 ml-1">票</span>
+                  </div>
                 </div>
               </div>
             );
           })}
-        </div>
-      </div>
-
-      {/* Dimension Stats */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-        <h3 className="text-xl font-bold text-slate-800 mb-5">各维度投票分布</h3>
-        
-        <div className="space-y-4">
-          {dimensionStats.map(({ dimension, totalVotes: dimVotes }) => (
-            <div key={dimension.id} className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-slate-700">{dimension.title}</span>
-                <span className="text-sm font-bold text-slate-800">{dimVotes} 票</span>
-              </div>
-              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-indigo-400 to-indigo-500 rounded-full transition-all duration-500"
-                  style={{ width: `${(dimVotes / maxDimensionVotes) * 100}%` }}
-                />
-              </div>
-            </div>
-          ))}
         </div>
       </div>
 
