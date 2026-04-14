@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
-import { VoteProgress } from '@/components/VoteProgress';
-import { DimensionSection } from '@/components/DimensionSection';
+import { useState } from 'react';
+import { NameEntry } from '@/components/NameEntry';
+import { DimensionVoteCard } from '@/components/DimensionVoteCard';
 import { ResultsView } from '@/components/ResultsView';
+import { SwotLegend } from '@/components/SwotLegend';
 import { useVoting } from '@/hooks/useVoting';
 import { dimensions, MAX_VOTES } from '@/data/issues';
 import { Button } from '@/components/ui/button';
@@ -18,11 +19,14 @@ import {
   AlertDescription,
   AlertTitle 
 } from '@/components/ui/alert';
-import { CheckCircle, AlertCircle, Landmark, ArrowRight, Loader2 } from 'lucide-react';
+import { CheckCircle, AlertCircle, Landmark, ArrowRight, Loader2, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 function App() {
   const {
+    voterName,
+    isNameSet,
+    setVoterName,
     userVotes,
     totalData,
     hasVoted,
@@ -31,49 +35,48 @@ function App() {
     error,
     userTotalVotes,
     remainingVotes,
-    addVote,
-    removeVote,
+    getDimensionVoteCount,
+    addVoteToDimension,
+    removeVoteFromDimension,
     submitVotes,
     resetVotes,
   } = useVoting();
 
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [showSuccessDialog, setShowSuccessDialog] = useState(false);
 
-  // Check if user has already voted on mount
-  useEffect(() => {
-    if (hasVoted && !isLoading) {
-      setShowSuccessDialog(true);
-    }
-  }, [hasVoted, isLoading]);
-
-  const handleAddVote = (issueId: string) => {
-    addVote(issueId);
+  // 处理姓名提交
+  const handleNameSubmit = (name: string) => {
+    setVoterName(name);
   };
 
-  const handleRemoveVote = (issueId: string) => {
-    removeVote(issueId);
+  // 处理添加投票
+  const handleAddVote = (dimensionId: string) => {
+    addVoteToDimension(dimensionId);
   };
 
-  const handleSubmit = async () => {
+  // 处理减少投票
+  const handleRemoveVote = (dimensionId: string) => {
+    removeVoteFromDimension(dimensionId);
+  };
+
+  // 处理提交
+  const handleSubmit = () => {
     if (userTotalVotes === 0) return;
     setShowConfirmDialog(true);
   };
 
+  // 确认提交
   const confirmSubmit = async () => {
     setShowConfirmDialog(false);
-    const success = await submitVotes();
-    if (success) {
-      setShowSuccessDialog(true);
-    }
+    await submitVotes();
   };
 
+  // 处理重置
   const handleReset = () => {
     resetVotes();
-    setShowSuccessDialog(false);
   };
 
-  // Loading state
+  // 加载状态
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -83,6 +86,11 @@ function App() {
         </div>
       </div>
     );
+  }
+
+  // 姓名登记页面
+  if (!isNameSet) {
+    return <NameEntry onSubmit={handleNameSubmit} />;
   }
 
   return (
@@ -102,14 +110,23 @@ function App() {
                 <p className="text-xs text-slate-500">关键议题投票</p>
               </div>
             </div>
+            
             {!hasVoted && (
-              <div className="text-right">
-                <p className="text-sm font-medium text-slate-600">
-                  已投 <span className="text-indigo-600 font-bold">{userTotalVotes}</span> 票
-                </p>
-                <p className="text-xs text-slate-500">
-                  剩余 {remainingVotes} 票
-                </p>
+              <div className="flex items-center gap-4">
+                {/* 投票人姓名 */}
+                <div className="flex items-center gap-2 text-sm text-slate-600">
+                  <User className="w-4 h-4" />
+                  <span>{voterName}</span>
+                </div>
+                {/* 投票进度 */}
+                <div className="text-right">
+                  <p className="text-sm font-medium text-slate-600">
+                    已投 <span className="text-indigo-600 font-bold">{userTotalVotes}</span> 票
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    剩余 {remainingVotes} 票
+                  </p>
+                </div>
               </div>
             )}
           </div>
@@ -136,11 +153,11 @@ function App() {
               </h2>
               <p className="text-indigo-100 text-sm leading-relaxed mb-4">
                 欢迎参与北京市城市规划设计研究院与瑞典 SWECO 联合工作坊的关键议题投票。
-                请从以下议题中选择您认为最重要的进行投票。
+                请从以下 15 个议题中选择您认为最重要的进行投票。
               </p>
               <div className="flex flex-wrap gap-3 text-sm">
                 <div className="bg-white/20 backdrop-blur-sm rounded-lg px-3 py-2">
-                  <span className="text-indigo-200">每人最多</span>
+                  <span className="text-indigo-200">每人共</span>
                   <span className="font-bold ml-1">{MAX_VOTES} 票</span>
                 </div>
                 <div className="bg-white/20 backdrop-blur-sm rounded-lg px-3 py-2">
@@ -148,29 +165,72 @@ function App() {
                   <span className="font-bold ml-1">多票投同一议题</span>
                 </div>
                 <div className="bg-white/20 backdrop-blur-sm rounded-lg px-3 py-2">
-                  <span className="text-indigo-200">匿名</span>
-                  <span className="font-bold ml-1">不记名投票</span>
+                  <span className="text-indigo-200">实名</span>
+                  <span className="font-bold ml-1">投票</span>
                 </div>
               </div>
             </div>
 
-            {/* Vote Progress */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 mb-6">
-              <VoteProgress current={userTotalVotes} max={MAX_VOTES} />
+            {/* SWOT Legend */}
+            <div className="mb-6">
+              <SwotLegend />
             </div>
 
-            {/* Dimension Sections */}
-            <div className="space-y-4">
+            {/* Vote Progress */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 mb-6">
+              <div className="w-full">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-slate-600">
+                    投票进度
+                  </span>
+                  <span className={cn(
+                    "text-sm font-bold",
+                    userTotalVotes === MAX_VOTES ? "text-emerald-600" : "text-indigo-600"
+                  )}>
+                    {userTotalVotes} / {MAX_VOTES} 票
+                  </span>
+                </div>
+                <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all duration-500 ease-out",
+                      userTotalVotes === MAX_VOTES 
+                        ? "bg-gradient-to-r from-emerald-400 to-emerald-500" 
+                        : "bg-gradient-to-r from-indigo-400 to-indigo-500"
+                    )}
+                    style={{ width: `${(userTotalVotes / MAX_VOTES) * 100}%` }}
+                  />
+                </div>
+                {userTotalVotes === 0 && (
+                  <p className="mt-2 text-sm text-slate-500 text-center">
+                    点击 + 按钮为议题投票，每人最多 {MAX_VOTES} 票
+                  </p>
+                )}
+                {userTotalVotes > 0 && userTotalVotes < MAX_VOTES && (
+                  <p className="mt-2 text-sm text-slate-500 text-center">
+                    还剩 {MAX_VOTES - userTotalVotes} 票，可继续投票或提交
+                  </p>
+                )}
+                {userTotalVotes === MAX_VOTES && (
+                  <p className="mt-2 text-sm text-emerald-600 font-medium text-center">
+                    已用完所有票数，可以提交投票了！
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Dimension Vote Cards */}
+            <div className="space-y-4 mb-24">
               {dimensions.map((dimension) => (
-                <DimensionSection
+                <DimensionVoteCard
                   key={dimension.id}
                   dimension={dimension}
-                  userVotes={userVotes}
-                  totalVotes={totalData.votes}
-                  onAddVote={handleAddVote}
-                  onRemoveVote={handleRemoveVote}
-                  remainingVotes={remainingVotes}
+                  voteCount={getDimensionVoteCount(dimension.id)}
+                  onAdd={() => handleAddVote(dimension.id)}
+                  onRemove={() => handleRemoveVote(dimension.id)}
+                  disabled={remainingVotes <= 0}
                   hasVoted={hasVoted}
+                  totalVotes={totalData.votes[dimension.id] || 0}
                 />
               ))}
             </div>
@@ -207,9 +267,6 @@ function App() {
                 </Button>
               </div>
             </div>
-
-            {/* Spacer for fixed button */}
-            <div className="h-20" />
           </>
         ) : (
           <>
@@ -236,6 +293,7 @@ function App() {
               totalVoteCount={totalData.totalVotes}
               voterCount={totalData.voterCount}
               userVotes={userVotes}
+              voterName={voterName}
               onReset={handleReset}
             />
           </>
@@ -251,7 +309,9 @@ function App() {
               确认提交投票
             </DialogTitle>
             <DialogDescription>
-              您已为 <span className="font-bold text-slate-800">{Object.keys(userVotes).length}</span> 项议题投了 
+              <span className="font-bold text-slate-800">{voterName}</span>，您已为 
+              <span className="font-bold text-slate-800"> {Object.keys(userVotes).length} </span>
+              个议题投了 
               <span className="font-bold text-slate-800"> {userTotalVotes} </span>票。
               提交后将无法修改，是否确认？
             </DialogDescription>
@@ -269,29 +329,6 @@ function App() {
               className="flex-1 bg-indigo-500 hover:bg-indigo-600"
             >
               确认提交
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Success Dialog */}
-      <Dialog open={showSuccessDialog} onOpenChange={setShowSuccessDialog}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-emerald-600">
-              <CheckCircle className="w-6 h-6" />
-              投票成功！
-            </DialogTitle>
-            <DialogDescription>
-              感谢您的参与！您已成功提交投票，以下是实时统计结果。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              onClick={() => setShowSuccessDialog(false)}
-              className="w-full bg-emerald-500 hover:bg-emerald-600"
-            >
-              查看结果
             </Button>
           </DialogFooter>
         </DialogContent>
