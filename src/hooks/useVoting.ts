@@ -6,7 +6,9 @@ import {
   getVoteStats, 
   checkHasVoted, 
   submitVotes as submitToSupabase,
-  subscribeToVotes
+  subscribeToVotes,
+  getVoterName,
+  saveVoterName,
 } from '@/lib/supabase';
 
 interface VotingData {
@@ -17,7 +19,12 @@ interface VotingData {
 
 export function useVoting() {
   const [voterId] = useState(() => generateVoterId());
+  const [voterName, setVoterName] = useState<string>(() => getVoterName() || '');
+  const [isNameSet, setIsNameSet] = useState<boolean>(() => !!getVoterName());
+  
+  // 维度投票状态：维度ID -> 投票数
   const [userVotes, setUserVotes] = useState<VoteState>({});
+  
   const [totalData, setTotalData] = useState<VotingData>({
     votes: {},
     totalVotes: 0,
@@ -45,7 +52,7 @@ export function useVoting() {
         
         // 如果已投票，从本地存储加载用户的投票记录
         if (voted) {
-          const savedVotes = localStorage.getItem(`bupd-votes-${voterId}`);
+          const savedVotes = localStorage.getItem(`bupd-dimension-votes-${voterId}`);
           if (savedVotes) {
             setUserVotes(JSON.parse(savedVotes));
           }
@@ -89,55 +96,75 @@ export function useVoting() {
     return () => clearInterval(interval);
   }, []);
 
+  // 设置投票人姓名
+  const setVoterNameAndSave = useCallback((name: string) => {
+    const trimmedName = name.trim();
+    if (trimmedName) {
+      saveVoterName(trimmedName);
+      setVoterName(trimmedName);
+      setIsNameSet(true);
+    }
+  }, []);
+
+  // 获取用户总投票数
   const getUserTotalVotes = useCallback(() => {
     return Object.values(userVotes).reduce((sum, count) => sum + count, 0);
   }, [userVotes]);
 
+  // 获取剩余票数
   const getRemainingVotes = useCallback(() => {
     return MAX_VOTES - getUserTotalVotes();
   }, [getUserTotalVotes]);
 
-  const addVote = useCallback((issueId: string) => {
+  // 获取某个维度的投票数
+  const getDimensionVoteCount = useCallback((dimensionId: string) => {
+    return userVotes[dimensionId] || 0;
+  }, [userVotes]);
+
+  // 给维度添加投票
+  const addVoteToDimension = useCallback((dimensionId: string) => {
     if (getRemainingVotes() <= 0) return false;
     
     setUserVotes(prev => ({
       ...prev,
-      [issueId]: (prev[issueId] || 0) + 1,
+      [dimensionId]: (prev[dimensionId] || 0) + 1,
     }));
     return true;
   }, [getRemainingVotes]);
 
-  const removeVote = useCallback((issueId: string) => {
+  // 给维度减少投票
+  const removeVoteFromDimension = useCallback((dimensionId: string) => {
     setUserVotes(prev => {
-      const current = prev[issueId] || 0;
+      const current = prev[dimensionId] || 0;
       if (current <= 1) {
-        const { [issueId]: _, ...rest } = prev;
+        const { [dimensionId]: _, ...rest } = prev;
         return rest;
       }
       return {
         ...prev,
-        [issueId]: current - 1,
+        [dimensionId]: current - 1,
       };
     });
   }, []);
 
-  const getVoteCount = useCallback((issueId: string) => {
-    return userVotes[issueId] || 0;
-  }, [userVotes]);
-
+  // 提交投票
   const submitVotesCallback = useCallback(async () => {
     if (getUserTotalVotes() === 0) return false;
+    if (!voterName.trim()) {
+      setError('请输入您的姓名');
+      return false;
+    }
     
     setIsSubmitting(true);
     setError(null);
     
     try {
-      const result = await submitToSupabase(userVotes, voterId);
+      const result = await submitToSupabase(userVotes, voterId, voterName.trim());
       
       if (result.success) {
         setHasVoted(true);
         // 保存用户的投票记录到本地
-        localStorage.setItem(`bupd-votes-${voterId}`, JSON.stringify(userVotes));
+        localStorage.setItem(`bupd-dimension-votes-${voterId}`, JSON.stringify(userVotes));
         
         // 刷新统计数据
         const stats = await getVoteStats();
@@ -157,27 +184,31 @@ export function useVoting() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [userVotes, voterId, getUserTotalVotes]);
+  }, [userVotes, voterId, voterName, getUserTotalVotes]);
 
+  // 重置投票（仅用于测试）
   const resetVotes = useCallback(() => {
-    // 注意：实际环境中不应该允许重置投票
-    // 这里仅用于测试
     setUserVotes({});
     setHasVoted(false);
-    localStorage.removeItem(`bupd-votes-${voterId}`);
+    localStorage.removeItem(`bupd-dimension-votes-${voterId}`);
   }, [voterId]);
 
-  const getTotalVotesForIssue = useCallback((issueId: string) => {
-    return totalData.votes[issueId] || 0;
+  // 获取维度的总票数
+  const getTotalVotesForDimension = useCallback((dimensionId: string) => {
+    return totalData.votes[dimensionId] || 0;
   }, [totalData.votes]);
 
-  const getTopIssues = useCallback((limit: number = 10) => {
+  // 获取热门维度排行
+  const getTopDimensions = useCallback((limit: number = 10) => {
     return Object.entries(totalData.votes)
       .sort((a, b) => b[1] - a[1])
       .slice(0, limit);
   }, [totalData.votes]);
 
   return {
+    voterName,
+    isNameSet,
+    setVoterName: setVoterNameAndSave,
     userVotes,
     totalData,
     hasVoted,
@@ -187,12 +218,12 @@ export function useVoting() {
     maxVotes: MAX_VOTES,
     userTotalVotes: getUserTotalVotes(),
     remainingVotes: getRemainingVotes(),
-    addVote,
-    removeVote,
-    getVoteCount,
+    getDimensionVoteCount,
+    addVoteToDimension,
+    removeVoteFromDimension,
     submitVotes: submitVotesCallback,
     resetVotes,
-    getTotalVotesForIssue,
-    getTopIssues,
+    getTotalVotesForDimension,
+    getTopDimensions,
   };
 }
