@@ -11,9 +11,7 @@
 
 ## 🚀 快速开始（5分钟完成部署）
 
-### 极简部署流程（无需 Edge Functions）
-
-本投票系统的前端可以直接读写 Supabase 数据库，**无需部署 Edge Functions** 即可工作。
+### 极简部署流程
 
 ```
 1. 创建 Supabase 项目
@@ -44,61 +42,62 @@
 
 1. 在项目 Dashboard 中，点击左侧菜单 **SQL Editor**
 2. 点击 **New query**
-3. 给查询起个名字，如 `create-votes-table`
+3. 给查询起个名字，如 `create-dimension-votes-table`
 
 ### 2. 执行 SQL
 
 复制以下 SQL 代码，粘贴到编辑器中，然后点击 **Run**：
 
 ```sql
--- 创建投票记录表
-CREATE TABLE IF NOT EXISTS votes (
+-- 创建维度投票记录表
+CREATE TABLE IF NOT EXISTS dimension_votes (
   id BIGSERIAL PRIMARY KEY,
-  issue_id TEXT NOT NULL,
+  dimension_id TEXT NOT NULL,
   vote_count INTEGER NOT NULL DEFAULT 1,
   voter_id TEXT NOT NULL,
+  voter_name TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 创建索引
-CREATE INDEX idx_votes_issue_id ON votes(issue_id);
-CREATE INDEX idx_votes_voter_id ON votes(voter_id);
+CREATE INDEX idx_dimension_votes_dimension_id ON dimension_votes(dimension_id);
+CREATE INDEX idx_dimension_votes_voter_id ON dimension_votes(voter_id);
+CREATE INDEX idx_dimension_votes_created_at ON dimension_votes(created_at);
 
--- 创建统计视图
-CREATE OR REPLACE VIEW vote_stats AS
+-- 创建维度投票统计视图
+CREATE OR REPLACE VIEW dimension_vote_stats AS
 SELECT 
-  issue_id,
-  SUM(vote_count) as total_votes,
-  COUNT(DISTINCT voter_id) as voter_count
-FROM votes
-GROUP BY issue_id;
+  dimension_id,
+  SUM(vote_count) as total_votes
+FROM dimension_votes
+GROUP BY dimension_id;
 
 -- 创建总体统计视图
-CREATE OR REPLACE VIEW total_stats AS
+CREATE OR REPLACE VIEW total_dimension_stats AS
 SELECT 
   SUM(vote_count) as total_votes,
   COUNT(DISTINCT voter_id) as total_voters
-FROM votes;
+FROM dimension_votes;
 
 -- 启用行级安全 (RLS)
-ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dimension_votes ENABLE ROW LEVEL SECURITY;
 
 -- 允许匿名插入投票
-CREATE POLICY "Allow anonymous insert" ON votes
+CREATE POLICY "Allow anonymous insert" ON dimension_votes
   FOR INSERT TO anon
   WITH CHECK (true);
 
 -- 允许匿名查询投票
-CREATE POLICY "Allow anonymous select" ON votes
+CREATE POLICY "Allow anonymous select" ON dimension_votes
   FOR SELECT TO anon
   USING (true);
 
 -- 禁止更新和删除（投票不可修改）
-CREATE POLICY "Disallow update" ON votes
+CREATE POLICY "Disallow update" ON dimension_votes
   FOR UPDATE TO anon
   USING (false);
 
-CREATE POLICY "Disallow delete" ON votes
+CREATE POLICY "Disallow delete" ON dimension_votes
   FOR DELETE TO anon
   USING (false);
 ```
@@ -106,8 +105,8 @@ CREATE POLICY "Disallow delete" ON votes
 ### 3. 验证表创建
 
 1. 点击左侧菜单 **Table Editor**
-2. 确认能看到 `votes` 表
-3. 点击 `votes` 表查看结构
+2. 确认能看到 `dimension_votes` 表
+3. 确认包含字段：`dimension_id`, `vote_count`, `voter_id`, `voter_name`
 
 ---
 
@@ -125,143 +124,9 @@ CREATE POLICY "Disallow delete" ON votes
 
 ---
 
-## 第四步（可选）：部署 Edge Functions
+## 第四步：配置前端环境变量
 
-> **说明**：本投票系统的前端可以直接连接 Supabase 数据库，Edge Functions 是可选的。如需使用，可通过以下两种方式部署：
-
-### 方法 A：通过 Supabase Dashboard 网页创建（推荐，无需终端）
-
-1. 登录 [Supabase Dashboard](https://app.supabase.com)
-2. 选择你的项目
-3. 点击左侧菜单 **Edge Functions**
-4. 点击右上角 **Create a new function**
-5. 填写函数信息：
-   - **Function Name**: `vote`
-   - **Index File**: 选择 `index.ts`
-6. 在代码编辑器中粘贴以下内容：
-
-```typescript
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.0'
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
-
-  try {
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
-    )
-
-    const { votes, voterId } = await req.json()
-
-    // 检查是否已投票
-    const { data: existingVotes } = await supabaseClient
-      .from('votes')
-      .select('id')
-      .eq('voter_id', voterId)
-      .limit(1)
-
-    if (existingVotes && existingVotes.length > 0) {
-      return new Response(
-        JSON.stringify({ error: 'You have already voted' }),
-        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    // 验证票数
-    const totalVotes = Object.values(votes).reduce((sum: number, count: number) => sum + count, 0)
-    if (totalVotes > 5 || totalVotes === 0) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid vote count' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    // 插入投票
-    const voteRecords = Object.entries(votes)
-      .filter(([, count]) => count > 0)
-      .map(([issueId, voteCount]) => ({
-        issue_id: issueId,
-        vote_count: voteCount,
-        voter_id: voterId,
-      }))
-
-    const { error } = await supabaseClient.from('votes').insert(voteRecords)
-    if (error) throw error
-
-    return new Response(
-      JSON.stringify({ success: true }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
-
-  } catch (error) {
-    return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
-  }
-})
-```
-
-7. 点击 **Deploy** 按钮部署
-8. （可选）重复上述步骤创建 `get-stats` 函数
-
-### 方法 B：通过终端部署（适合批量操作）
-
-如需使用 Supabase CLI：
-
-```bash
-# 安装 Supabase CLI
-npm install -g supabase
-
-# 登录
-supabase login
-
-# 链接项目
-supabase link --project-ref your-project-id
-
-# 部署函数
-supabase functions deploy vote
-supabase functions deploy get-stats
-```
-
-### 配置函数权限
-
-1. 进入 Supabase Dashboard → **Edge Functions**
-2. 点击已部署的函数
-3. 在 **Function Details** 中，确保 **Policy** 允许匿名访问
-
----
-
-## 第五步：配置前端环境变量
-
-### 1. 获取 Supabase 配置
-
-1. 进入 [Supabase Dashboard](https://app.supabase.com)
-2. 选择你的项目
-3. 点击左侧菜单 **Project Settings** → **API**
-4. 复制以下信息：
-   - **Project URL**: `https://your-project-id.supabase.co`
-   - **anon public**: `eyJhbGciOiJIUzI1NiIs...`
-
-### 2. 配置环境变量
-
-1. 复制环境变量模板：
-
-```bash
-cp .env.example .env
-```
-
-2. 编辑 `.env` 文件，填入你的 Supabase 配置：
+1. 编辑 `.env` 文件，填入你的 Supabase 配置：
 
 ```env
 VITE_SUPABASE_URL=https://your-project-id.supabase.co
@@ -272,7 +137,7 @@ VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6...
 
 ---
 
-## 第六步：构建和部署前端
+## 第五步：构建和部署前端
 
 ### 本地构建测试
 
@@ -287,9 +152,7 @@ npm run dev
 npm run build
 ```
 
-### 部署到静态托管
-
-#### 方案 A：Vercel（推荐，完全免费）
+### 部署到 Vercel（推荐）
 
 1. 将代码推送到 GitHub/GitLab/Bitbucket
 2. 访问 [vercel.com](https://vercel.com) 注册/登录
@@ -304,82 +167,77 @@ npm run build
    - `VITE_SUPABASE_ANON_KEY` = `your-anon-key`
 7. 点击 **Deploy**
 
-#### 方案 B：Netlify
-
-1. 将代码推送到 GitHub
-2. 访问 [netlify.com](https://netlify.com) 注册/登录
-3. 点击 **Add new site** → **Import an existing project**
-4. 选择你的 GitHub 仓库
-5. 配置构建设置：
-   - Build command: `npm run build`
-   - Publish directory: `dist`
-6. 点击 **Show advanced** → **New variable**，添加环境变量
-7. 点击 **Deploy site**
-
-#### 方案 C：Cloudflare Pages
-
-1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com)
-2. 点击 **Pages** → **Create a project**
-3. 连接你的 Git 仓库
-4. 构建设置：
-   - Build command: `npm run build`
-   - Build output directory: `dist`
-5. 添加环境变量
-6. 点击 **Save and Deploy**
-
-#### 方案 D：Supabase Storage（纯 Supabase 方案）
-
-1. 进入 Supabase Dashboard → **Storage**
-2. 创建新的 Bucket，命名为 `website`
-3. 在 Bucket 设置中，开启 **Public bucket**
-4. 上传 `dist` 文件夹中的所有文件
-5. 点击 **index.html** → **Get URL** 获取访问链接
-
-> **注意**：Storage 方案不支持自定义域名，建议生产环境使用 Vercel/Netlify
-
 ---
 
-## 第七步：验证部署
+## 第六步：验证部署
 
 1. 访问部署后的网站
-2. 测试投票功能
-3. 在 Supabase Dashboard → **Table Editor** → **votes** 中查看数据
+2. 输入姓名进入投票页面
+3. 测试投票功能（选择维度，投票）
+4. 在 Supabase Dashboard → **Table Editor** → **dimension_votes** 中查看数据
 
 ---
 
 ## 数据库表结构
 
-### votes 表
+### dimension_votes 表
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | bigint | 主键，自增 |
-| issue_id | text | 议题ID |
-| vote_count | integer | 投票数 |
-| voter_id | text | 投票者ID |
+| dimension_id | text | 维度ID（15个维度之一） |
+| vote_count | integer | 该维度的投票数 |
+| voter_id | text | 投票者唯一ID |
+| voter_name | text | 投票者姓名 |
 | created_at | timestamptz | 创建时间 |
 
 ### 视图
 
-- `vote_stats`: 按议题统计总票数
-- `total_stats`: 总体统计（总票数、总投票人数）
+- `dimension_vote_stats`: 按维度统计总票数
+- `total_dimension_stats`: 总体统计（总票数、总投票人数）
 
 ---
 
-## 安全说明
+## 投票规则
 
-### 行级安全 (RLS)
+- 每人共 **5 票**
+- 可以给 **一个维度投多票**（最多5票）
+- 也可以 **分散投票**给多个维度
+- 投票前需要 **输入姓名**
+- 每人只能投票 **一次**
 
-已配置以下策略：
-- ✅ 允许匿名插入投票
-- ✅ 允许匿名查询统计数据
-- ❌ 禁止更新投票记录
-- ❌ 禁止删除投票记录
+---
 
-### 防重复投票
+## 15个投票维度
 
-- 使用 `voter_id`（基于浏览器 localStorage）识别用户
-- 数据库层面有唯一约束防止同一用户重复投票
+1. 可持续资金平衡
+2. 实施主体
+3. 城市更新实施单元生成
+4. 跨部门协同机制
+5. 土地、房屋和空间权属结构
+6. 多元利益平衡
+7. 公众参与度
+8. 市场活力
+9. 存量转型
+10. 首都功能
+11. 产业转型与新功能导入
+12. 以人为本的空间品质
+13. 绿色转型
+14. 资源基础
+15. 政策环境
+
+---
+
+## SWOT 标签说明
+
+每个维度下的要点按 SWOT 分析分类：
+
+| 标签 | 颜色 | 含义 |
+|------|------|------|
+| **S** | 绿色 | 优势 (Strengths) |
+| **W** | 黄色 | 劣势 (Weaknesses) |
+| **O** | 淡蓝色 | 机遇 (Opportunities) |
+| **T** | 红色 | 挑战 (Threats) |
 
 ---
 
@@ -395,76 +253,15 @@ npm run build
 ### 问题：投票提交失败
 
 **检查清单：**
-1. 数据库表是否正确创建
+1. 数据库表 `dimension_votes` 是否正确创建
 2. RLS 策略是否正确配置
 3. 网络连接是否正常
 
-### 问题：实时更新不生效
+### 问题：姓名没有记录
 
 **检查清单：**
-1. Supabase Realtime 是否启用
-2. 数据库触发器是否正确配置
-3. 前端订阅代码是否正确
-
----
-
-## 自定义配置
-
-### 修改最大投票数
-
-编辑 `src/data/issues.ts`：
-
-```typescript
-export const MAX_VOTES = 5; // 修改为你需要的数字
-```
-
-### 添加新议题
-
-编辑 `src/data/issues.ts`，在 `dimensions` 数组中添加新的维度或议题。
-
-### 修改实时刷新频率
-
-编辑 `src/hooks/useVoting.ts`：
-
-```typescript
-// 定期刷新数据（每10秒）
-const interval = setInterval(async () => {
-  // ...
-}, 10000); // 修改为你需要的毫秒数
-```
-
----
-
-## 架构说明
-
-### 为什么 Edge Functions 是可选的？
-
-本投票系统采用 **直接数据库访问** 架构：
-
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│   前端 App   │────▶│  Supabase JS │────▶│  PostgreSQL │
-│  (React)    │     │   Client     │     │   Database  │
-└─────────────┘     └──────────────┘     └─────────────┘
-                            │
-                            ▼
-                     ┌──────────────┐
-                     │  RLS Policies │
-                     │  (安全策略)   │
-                     └──────────────┘
-```
-
-**优势：**
-- ✅ 更简单：无需维护后端代码
-- ✅ 更快：减少一次网络跳转
-- ✅ 更安全：RLS 策略在数据库层面控制权限
-- ✅ 免费：不消耗 Edge Function 调用额度
-
-**何时需要 Edge Functions？**
-- 需要复杂的业务逻辑验证
-- 需要调用第三方 API
-- 需要发送邮件/通知
-- 需要定时任务
+1. 确认 `voter_name` 字段存在于表中
+2. 检查前端是否正确发送 `voter_name`
 
 ---
 
@@ -472,5 +269,4 @@ const interval = setInterval(async () => {
 
 - [Supabase 文档](https://supabase.com/docs)
 - [Supabase JavaScript 客户端](https://supabase.com/docs/reference/javascript)
-- [Edge Functions 文档](https://supabase.com/docs/guides/functions)
 - [RLS 策略指南](https://supabase.com/docs/guides/auth/row-level-security)
