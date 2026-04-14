@@ -28,21 +28,22 @@ export function getVoterName(): string | null {
 // 获取投票统计数据
 export async function getVoteStats() {
   try {
-    const { data, error } = await supabase
-      .from('dimension_votes')
+    // 1. 获取每个维度的票数统计（从视图）
+    const { data: dimensionStats, error: dimError } = await supabase
+      .from('dimension_vote_stats')
       .select('*')
     
-    if (error) throw error
+    if (dimError) throw dimError
     
-    // 转换为对象格式
+    // 转换为对象格式: { dimension_id: total_votes }
     const votes: Record<string, number> = {}
-    data?.forEach((stat: { dimension_id: string; total_votes: number }) => {
+    dimensionStats?.forEach((stat: { dimension_id: string; total_votes: number }) => {
       votes[stat.dimension_id] = stat.total_votes
     })
     
-    // 获取总体统计
+    // 2. 获取总体统计（从总体统计视图）
     const { data: totalData, error: totalError } = await supabase
-      .from('dimension_vote_stats')
+      .from('total_dimension_stats')
       .select('*')
       .single()
     
