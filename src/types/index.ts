@@ -1,20 +1,24 @@
-export interface Issue {
+export type SwotType = 'strength' | 'weakness' | 'opportunity' | 'threat';
+
+export interface SwotPoint {
   id: string;
   text: string;
-  type: 'positive' | 'negative';
+  type: SwotType;
 }
 
-export interface Dimension {
+export interface DimensionWithSwot {
   id: string;
   title: string;
-  issues: Issue[];
+  points: SwotPoint[];
 }
 
+// 投票状态：维度ID -> 投票数
 export interface VoteState {
-  [issueId: string]: number;
+  [dimensionId: string]: number;
 }
 
 export interface VoteRecord {
   timestamp: number;
   votes: VoteState;
+  voterName: string;
 }
